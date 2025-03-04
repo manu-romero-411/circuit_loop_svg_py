@@ -146,25 +146,31 @@ def improve_func(matrix):
 def mutatio(matrix, num_muts):
     rows = len(matrix)
     cols = len(matrix[0])
-    matrix_new = None
+    matrix_new = matrix
     for i in range(0, num_muts):
-        matrix_new = matrix
-        rand_tile = random.randint(0, 15)
+        matrix_save = matrix_new
         rand_row = random.randint(0, rows)
         rand_col = random.randint(0, cols)
-        matrix_new[rand_row - 1][rand_col - 1] = rand_tile
-        posb_u = possible_values(rand_tile, "up")
-        value_u = matrix_new[rand_row - 2][rand_col - 1]
-        if not value_u in posb_u:
-            matrix_new[rand_row - 2][rand_col - 1] = random.choice(posb_u)
 
-        value_l = matrix_new[rand_row - 1][rand_col - 2]
-        posb_l = possible_values(rand_tile, "left")
-        if not value_l in posb_l:
-            matrix_new[rand_row - 1][rand_col - 2] = random.choice(posb_l)
-        print(cost(matrix_new))
+        while local_cost(matrix[rand_row - 1][rand_col - 1]) != 0:
+            rand_tile = random.randint(0, 15)
+            rand_row = random.randint(0, rows)
+            rand_col = random.randint(0, cols)
+            matrix_new[rand_row - 1][rand_col - 1] = rand_tile
+            posb_u = possible_values(rand_tile, "up")
+            value_u = matrix_new[rand_row - 2][rand_col - 1]
+            if not value_u in posb_u:
+                matrix_new[rand_row - 2][rand_col - 1] = random.choice(posb_u)
+
+            value_l = matrix_new[rand_row - 1][rand_col - 2]
+            posb_l = possible_values(rand_tile, "left")
+            if not value_l in posb_l:
+                matrix_new[rand_row - 1][rand_col - 2] = random.choice(posb_l)
         if cost(matrix_new) == 0:
             return(matrix_new)
+        else:
+            print(cost(matrix_new))
+            matrix_new = matrix_save
     return(matrix_new)
  
 def check_edges(rows, cols, max_rows, max_cols):
@@ -199,15 +205,36 @@ def cost(matrix):
                     cost = cost + 1
     return(cost)
 
+def local_cost(num):
+    cost = 0
+    posb_u = possible_values(num, "up")
+    posb_d = possible_values(num, "down")
+    posb_l = possible_values(num, "left")
+    posb_r = possible_values(num, "right")
+
+    if not num in posb_u:
+        cost = cost + 1
+
+    if not num in posb_d:
+        cost = cost + 1
+
+    if not num in posb_l:
+        cost = cost + 1
+
+    if not num in posb_r:
+        cost = cost + 1
+
+    return(cost)
+
 #matrix = local_search(8, 8)
 
 #sols = [generate(8,8) for i in range(0,9)]
 #print(cost(sols[0]))
 
-test = [[0, 0, 0, 0, 0, 0, 0, 0], [0, 0, 10, 13, 1, 15, 0, 0], [0, 2, 0, 0, 9, 8, 5, 0], [0, 9, 12, 12, 14, 5, 13, 0], [0, 1, 12, 9, 12, 4, 10, 0], [0, 13, 1, 12, 4, 2, 11, 0], [0, 0, 3, 8, 3, 0, 0, 0], [0, 0, 0, 0, 0, 0, 0, 0]]
+test = generate(4,5)
 tested = improve_func(test)
 while(cost(tested) != 0):
-    tested = mutatio(test, 3000)
+    tested = mutatio(test, 30000)
     print(cost(tested))
 
 print(cost(tested))
