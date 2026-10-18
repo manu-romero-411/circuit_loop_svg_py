@@ -1,208 +1,275 @@
 #!/usr/bin/env python3
-import random
+"""Random circuit-pattern SVG generator.
+
+Every tile of the grid is described by a 4-bit mask in ``UDLR`` order
+(up, down, left, right). A set bit means the tile has a wire leaving
+through that side, so a tile is simply one of the 16 values ``0b0000``
+to ``0b1111``.
+
+Consistency is guaranteed by construction: instead of picking tiles and
+checking their neighbours, the generator decides which *edges* between
+adjacent cells exist. The right bit of a tile and the left bit of the
+tile next to it always come from the same edge, so wires never end in
+the middle of nowhere and never point outside the grid.
+"""
+
 import argparse
+import random
+import sys
+from typing import List, Optional, Tuple
 
-# 0: {} => U False => se permiten j con D False (0,2,5,6,10,11,13,14)
-# 1: {U,D} => U True => se permiten j con D True (1,3,4,7,8,9,12,15)
-# 2: {L,R} => U False => igual que 0
+UP = 0b1000
+DOWN = 0b0100
+LEFT = 0b0010
+RIGHT = 0b0001
 
-# 3: {L,D} => U False
-# 4: {R,D} => U False
-# 5: {R,U} => U True
-# 6: {L,U} => U True
+# Each side with its unit vector (dx, dy); y grows downwards in SVG.
+SIDES: Tuple[Tuple[int, Tuple[int, int]], ...] = (
+    (UP, (0, -1)),
+    (DOWN, (0, 1)),
+    (LEFT, (-1, 0)),
+    (RIGHT, (1, 0)),
+)
 
-# 7: {L,R,D} => U False
-# 8: {L,U,D} => U True
-# 9: {R,U,D} => U True
-# 10: {L,R,U} => U True
+STRAIGHT_TILES = (UP | DOWN, LEFT | RIGHT)
 
-# 11: {U} => U True
-# 12: {D} => U False
-# 13: {L} => U False
-# 14: {R} => U False
+TILE_SIZE = 32
+HALF = TILE_SIZE // 2
+WIRE_WIDTH = 6
+PAD_RADIUS = 8
 
-# 15: {U,D,L,R} => U True
+# Filled outlines for tiles with 3 or 4 wires, drawn in a 32x32 tile.
+JUNCTION_PATHS = {
+    LEFT | RIGHT | DOWN: (
+        "M 32,13 C 25.29599,13 19.38386,16.512054 16,21.787109 "
+        "12.61605,16.51255 6.7036399,13 0,13 v 6 C 7.2152399,19 13,24.784764 "
+        "13,32 h 6 c 0,-7.215236 5.78477,-13.000001 13,-13 z"
+    ),
+    LEFT | UP | DOWN: (
+        "M 19,32 C 19,25.29599 15.48795,19.38386 10.21289,16 15.48745,12.61605 "
+        "19,6.7036401 19,0 H 13 C 13,7.2152401 7.21524,13 0,13 v 6 c 7.21524,0 "
+        "13,5.78477 13,13 z"
+    ),
+    RIGHT | UP | DOWN: (
+        "M 13,32 C 13,25.29599 16.51205,19.38386 21.78711,16 16.51255,12.61605 "
+        "13,6.7036401 13,0 h 6 C 19,7.2152401 24.78476,13 32,13 v 6 c "
+        "-7.21524,0 -13,5.78477 -13,13 z"
+    ),
+    LEFT | RIGHT | UP: (
+        "M 32,19 C 25.29599,19 19.38386,15.487945 16,10.212891 "
+        "12.61605,15.487449 6.7036404,19 0,19 V 13 C 7.2152404,13 13,7.2152358 "
+        "13,0 h 6 C 19,7.2152358 24.78477,13 32,13 Z"
+    ),
+    UP | DOWN | LEFT | RIGHT: (
+        "M 13,0 C 13,7.2152361 7.2152402,13 0,13 v 6 c 7.2152402,0 13,5.784764 "
+        "13,13 h 6 C 19,24.784764 24.78477,19 32,19 V 13 C 24.78477,13 "
+        "19,7.2152361 19,0 Z m 3,10.212891 C 17.48785,12.53228 "
+        "19.465385,14.51096 21.783203,16 19.465385,17.48904 17.48785,19.46772 "
+        "16,21.787109 14.511334,19.466728 12.532315,17.489345 10.212891,16 "
+        "12.532315,14.510655 14.511334,12.533272 16,10.212891 Z"
+    ),
+}
 
-allowed_up = [
-    [-1, 0, -1, 0, 0, -1, -1, 0, 0, 0, -1, -1, 0, -1, -1, 0],  # 0
-    [ 0, 1,  0, 1, 1,  0,  0, 1, 1, 1,  0,  0, 1,  0,  0, 1],  # 1
-    [-1, 0, -1, 0, 0, -1, -1, 0, 0, 0, -1, -1, 0, -1, -1, 0],  # 2
-    [-1, 0, -1, 0, 0, -1, -1, 0, 0, 0, -1, -1, 0, -1, -1, 0],  # 3
-    [-1, 0, -1, 0, 0, -1, -1, 0, 0, 0, -1, -1, 0, -1, -1, 0],  # 4
-    [ 0, 1,  0, 1, 1,  0,  0, 1, 1, 1,  0,  0, 1,  0,  0, 1],  # 5
-    [ 0, 1,  0, 1, 1,  0,  0, 1, 1, 1,  0,  0, 1,  0,  0, 1],  # 6
-    [-1, 0, -1, 0, 0, -1, -1, 0, 0, 0, -1, -1, 0, -1, -1, 0],  # 7
-    [ 0, 1,  0, 1, 1,  0,  0, 1, 1, 1,  0,  0, 1,  0,  0, 1],  # 8
-    [ 0, 1,  0, 1, 1,  0,  0, 1, 1, 1,  0,  0, 1,  0,  0, 1],  # 9
-    [ 0, 1,  0, 1, 1,  0,  0, 1, 1, 1,  0,  0, 1,  0,  0, 1],  # 10
-    [ 0, 1,  0, 1, 1,  0,  0, 1, 1, 1,  0,  0, 1,  0,  0, 1],  # 11
-    [-1, 0, -1, 0, 0, -1, -1, 0, 0, 0, -1, -1, 0, -1, -1, 0],  # 12
-    [-1, 0, -1, 0, 0, -1, -1, 0, 0, 0, -1, -1, 0, -1, -1, 0],  # 13
-    [-1, 0, -1, 0, 0, -1, -1, 0, 0, 0, -1, -1, 0, -1, -1, 0],  # 14
-    [ 0, 1,  0, 1, 1,  0,  0, 1, 1, 1,  0,  0, 1,  0,  0, 1]   # 15
-]
-
-allowed_left = [
-    [-1, -1,  0, -1,  0,  0, -1,  0, -1,  0,  0, -1, -1, -1,  0,  0],  # 0
-    [-1, -1,  0, -1,  0,  0, -1,  0, -1,  0,  0, -1, -1, -1,  0,  0],  # 1
-    [ 0,  0,  1,  0,  1,  1,  0,  1,  0,  1,  1,  0,  0,  0,  1,  1],  # 2
-    [ 0,  0,  1,  0,  1,  1,  0,  1,  0,  1,  1,  0,  0,  0,  1,  1],  # 3
-    [-1, -1,  0, -1,  0,  0, -1,  0, -1,  0,  0, -1, -1, -1,  0,  0],  # 4
-    [-1, -1,  0, -1,  0,  0, -1,  0, -1,  0,  0, -1, -1, -1,  0,  0],  # 5
-    [ 0,  0,  1,  0,  1,  1,  0,  1,  0,  1,  1,  0,  0,  0,  1,  1],  # 6
-    [ 0,  0,  1,  0,  1,  1,  0,  1,  0,  1,  1,  0,  0,  0,  1,  1],  # 7
-    [ 0,  0,  1,  0,  1,  1,  0,  1,  0,  1,  1,  0,  0,  0,  1,  1],  # 8
-    [-1, -1,  0, -1,  0,  0, -1,  0, -1,  0,  0, -1, -1, -1,  0,  0],  # 9
-    [ 0,  0,  1,  0,  1,  1,  0,  1,  0,  1,  1,  0,  0,  0,  1,  1],  # 10
-    [-1, -1,  0, -1,  0,  0, -1,  0, -1,  0,  0, -1, -1, -1,  0,  0],  # 11
-    [-1, -1,  0, -1,  0,  0, -1,  0, -1,  0,  0, -1, -1, -1,  0,  0],  # 12
-    [ 0,  0,  1,  0,  1,  1,  0,  1,  0,  1,  1,  0,  0,  0,  1,  1],  # 13
-    [-1, -1,  0, -1,  0,  0, -1,  0, -1,  0,  0, -1, -1, -1,  0,  0],  # 14
-    [ 0,  0,  1,  0,  1,  1,  0,  1,  0,  1,  1,  0,  0,  0,  1,  1]   # 15
-]
+Grid = List[List[int]]
+Point = Tuple[int, int]
 
 
-def possible_values(value, direction):
-    arr = []
-    if direction == "up":
-        for i in range(0, 16):
-            if allowed_up[value][i] != 0:
-                arr.append(i)
+def generate_grid(
+    rows: int, cols: int, density: float, rng: random.Random
+) -> Grid:
+    """Build a rows x cols grid of UDLR masks.
 
-    elif direction == "down":
-        for i in range(0, 16):
-            if allowed_up[i][value] != 0:
-                arr.append(i)
+    ``density`` is the probability (0..1) that two adjacent cells are
+    connected by a wire.
+    """
+    horizontal = [
+        [rng.random() < density for _ in range(cols - 1)] for _ in range(rows)
+    ]
+    vertical = [
+        [rng.random() < density for _ in range(cols)] for _ in range(rows - 1)
+    ]
+    return [
+        [tile_mask(row, col, horizontal, vertical) for col in range(cols)]
+        for row in range(rows)
+    ]
 
-    elif direction == "left":
-        for i in range(0, 16):
-            if allowed_left[value][i] != 0:
-                arr.append(i)
 
-    elif direction == "right":
-        for i in range(0, 16):
-            if allowed_left[i][value] != 0:
-                arr.append(i)
+def tile_mask(
+    row: int, col: int, horizontal: List[List[bool]], vertical: List[List[bool]]
+) -> int:
+    """Return the UDLR mask of one tile from the grid's edge tables.
 
-    return(arr)
+    ``horizontal[r][c]`` links cell (r, c) with (r, c + 1) and
+    ``vertical[r][c]`` links cell (r, c) with (r + 1, c).
+    """
+    mask = 0
+    if row > 0 and vertical[row - 1][col]:
+        mask |= UP
+    if row < len(vertical) and vertical[row][col]:
+        mask |= DOWN
+    if col > 0 and horizontal[row][col - 1]:
+        mask |= LEFT
+    if col < len(horizontal[row]) and horizontal[row][col]:
+        mask |= RIGHT
+    return mask
 
-def new_empty_matrix(cols, rows):
-    return [([0] * cols) for i in range(rows)]
 
-def new_check_array(rows, cols):
-    checks = [([0] * cols) for i in range(rows)]
-    checks[0] = [1] * cols
-    checks[len(checks) - 1] = [1] * cols
-    for i in range(0, rows):
-        checks[i][0] = 1
-        checks[i][cols - 1] = 1
+def is_consistent(grid: Grid) -> bool:
+    """Check that every wire has a matching wire on the neighbouring tile."""
+    rows, cols = len(grid), len(grid[0])
+    for row in range(rows):
+        for col in range(cols):
+            mask = grid[row][col]
+            if bool(mask & UP) != (row > 0 and bool(grid[row - 1][col] & DOWN)):
+                return False
+            if bool(mask & LEFT) != (col > 0 and bool(grid[row][col - 1] & RIGHT)):
+                return False
+            if mask & DOWN and row == rows - 1:
+                return False
+            if mask & RIGHT and col == cols - 1:
+                return False
+    return True
 
-    checks[1][1] = 1
-    checks[rows - 2][1] = 1
-    checks[rows - 2][cols - 2] = 1
-    checks[1][cols - 2] = 1
-    return checks
 
-def create_matrix(matrix):
-    checks = new_check_array(len(matrix), len(matrix[0]))
-    for i in range(1, len(matrix) - 1):
-        for j in range(1, len(matrix[0]) - 1):
-            if checks[i][j] != 1:
-                possible_vals = []
-                u = matrix[i-1][j]
-                d = matrix[i+1][j]
-                l = matrix[i][j-1]
-                r = matrix[i][j+1]
-                if checks[i-1][j] == 1:
-                    possible_vals.append(possible_values(u, "down"))
-                if checks[i+1][j] == 1:
-                    possible_vals.append(possible_values(d, "up"))
-                if checks[i][j-1] == 1:
-                    possible_vals.append(possible_values(l, "right"))
-                if checks[i][j+1] == 1:
-                    possible_vals.append(possible_values(r, "left"))
+def point(origin: Point, vector: Tuple[int, int], distance: int) -> Point:
+    """Return the point ``distance`` away from the tile centre along vector."""
+    return (
+        origin[0] + HALF + vector[0] * distance,
+        origin[1] + HALF + vector[1] * distance,
+    )
 
-                common_vals = []
-                if len(possible_vals) > 1:
-                    common_vals = set(possible_vals[0])
-                    for s in possible_vals[1:]:
-                        common_vals.intersection_update(s)
-                    common_vals = list(common_vals)
-                else:
-                    common_vals = common_vals[0]
 
-                if len(common_vals) > 0:
-                    matrix[i][j] = random.choice(common_vals)
-                else:
-                    matrix[i][j] = random.randint(0, 15)
-                
-                checks[i][j] = 1
-    return(matrix)
+def tile_elements(mask: int, origin: Point) -> Tuple[List[str], List[str]]:
+    """Return ``(path_commands, shapes)`` needed to draw one tile.
 
-def svg_def(x, y):
-    svg_header = """<?xml version="1.0" encoding="UTF-8" standalone="no"?>"""
-    svg_header += f"<svg width=\"{y*32}\" height=\"{x*32}\" viewBox=\"0 0 {y*32} {x*32}\" version=\"1.1\" id=\"svg1\">"""
-    return svg_header
+    * 1 wire: a pad (ring) with a wire going to the tile edge.
+    * 2 wires: a straight wire or a 90 degree circular arc.
+    * 3 or 4 wires: a filled junction shape (see ``JUNCTION_PATHS``).
+    """
+    vectors = [vector for flag, vector in SIDES if mask & flag]
+    center = point(origin, (0, 0), 0)
+    commands: List[str] = []
+    shapes: List[str] = []
 
-def svg_draw_tile(num, x, y):
-    group = f"<g transform=\"translate({y*32},{x*32})\">"
-    tile = ""
-    stub_square = "<rect style=\"fill:none;stroke-width:6;paint-order:markers fill stroke\" width=\"32\" height=\"32\" x=\"0\" y=\"0\" />"
-    match num:
-        case 1:
-            tile = """<path style="baseline-shift:baseline;display:inline;overflow:visible;vector-effect:none;paint-order:markers fill stroke;enable-background:accumulate;stop-color:#000000;stop-opacity:1" transform="scale(-1)" d="m -19,-32 h 5.999998 V 0 H -19 Z" />"""
-        case 2:
-            tile = """<path style="baseline-shift:baseline;display:inline;overflow:visible;vector-effect:none;paint-order:markers fill stroke;enable-background:accumulate;stop-color:#000000;stop-opacity:1" transform="rotate(90)" d="m 13.000001,-32 h 5.999998 V 0 h -5.999998 z" />"""
-        case 3:
-            tile = """<path d="m 0,13 v 6 c 7.2152356,0 13,5.784764 13,13 h 6 C 19,21.542124 10.457876,13 0,13 Z" style="paint-order:markers fill stroke" id="path8" />"""
-        case 4:
-            tile = """<path d="m 32,13 v 6 C 24.784764,19 19,24.784764 19,32 H 13 C 13,21.542124 21.542124,13 32,13 Z" style="paint-order:markers fill stroke" id="path8" />"""
-        case 5:
-            tile = """<path d="M 32,19 V 13 C 24.784764,13 19,7.215236 19,0 h -6 c 0,10.457876 8.542124,19 19,19 z" style="paint-order:markers fill stroke" id="path8" />"""
-        case 6:
-            tile = """<path d="M 19,0 H 13 C 13,7.215236 7.215236,13 0,13 v 6 C 10.457876,19 19,10.457876 19,0 Z" style="paint-order:markers fill stroke" id="path8" />"""
-        case 7:
-            tile = """<path d="M 32,13 C 25.29599,13 19.38386,16.512054 16,21.787109 12.61605,16.51255 6.7036399,13 -6.8563745e-8,13 v 6 C 7.2152399,19 13,24.784764 13,32 h 6 c 0,-7.215236 5.78477,-13.000001 13,-13 z" style="stroke-width:6;paint-order:markers fill stroke" id="path28" />"""
-        case 8:
-            tile = """<path d="M 19,32 C 19,25.29599 15.48795,19.38386 10.21289,16 15.48745,12.61605 19,6.7036401 19,2.3286998e-8 H 13 C 13,7.2152401 7.21524,13 0,13 v 6 c 7.21524,0 13,5.78477 13,13 z" style="stroke-width:6;paint-order:markers fill stroke" id="path28" />"""
-        case 9:
-            tile = """<path d="M 13,32 C 13,25.29599 16.51205,19.38386 21.78711,16 16.51255,12.61605 13,6.7036401 13,2.3286998e-8 h 6 C 19,7.2152401 24.78476,13 32,13 v 6 c -7.21524,0 -13,5.78477 -13,13 z" style="stroke-width:6;paint-order:markers fill stroke"/>"""
-        case 10:
-            tile = """<path d="M 31.999999,18.999999 C 25.29599,18.999999 19.38386,15.487945 16,10.212891 12.61605,15.487449 6.7036404,18.999999 7.25745e-7,18.999999 V 13 C 7.2152404,13 13,7.2152358 13,9.3148003e-8 h 6 C 19,7.2152358 24.78477,13.000001 31.999999,13 Z" style="stroke-width:6;paint-order:markers fill stroke" id="path28" />"""
-        case 11:
-            tile = """<path style="stroke-width:6;paint-order:markers fill stroke" d="m 16.00002,28.937495 c -7.1441594,0 -12.9999992,-5.855831 -12.9999992,-12.999999 0,-5.282468 3.2031155,-9.8574682 7.7597652,-11.8847643 l -0.0059,-0.011717 A 3.7752101,3.7752101 0 0 0 13.000021,0.60156256 V -0.0625 h 3 2.999999 v 0.66406256 a 3.7752101,3.7752101 0 0 0 2.246094,3.43945254 l -0.0059,0.011717 c 4.556649,2.0272961 7.759765,6.6022959 7.759765,11.8847639 0,7.144168 -5.85584,12.999999 -13.000001,12.999999 z m 0,-5.999999 c 3.901519,1e-6 6.999999,-3.098472 6.999999,-7 0,-3.901526 -3.09848,-6.999999 -6.999999,-6.999999 -3.90152,0 -6.9999995,3.098473 -6.9999995,6.999999 0,3.901528 3.0984795,7.000001 6.9999995,7 z" />"""
-        case 12:
-            tile = """<path id="path55" style="stroke-width:6;paint-order:markers fill stroke" d="m 16.000022,2.999998 c -7.1441598,0 -13,5.8558319 -13,13 0,5.282469 3.2031156,9.857469 7.759766,11.884766 l -0.0059,0.01172 a 3.7752104,3.7752104 0 0 1 2.246093,3.439453 V 32 h 3 3 v -0.664061 a 3.7752104,3.7752104 0 0 1 2.246094,-3.439452 l -0.0059,-0.01172 c 4.556647,-2.027299 7.759763,-6.602299 7.759763,-11.884768 0,-7.1441681 -5.85584,-13 -13,-13 z m 0,6.0000001 c 3.90152,-1.2e-6 7,3.0984719 7,6.9999999 0,3.901527 -3.09848,7 -7,7 -3.90152,0 -6.9999999,-3.098473 -6.9999999,-7 0,-3.901528 3.0984799,-7.0000011 6.9999999,-6.9999999 z" />"""
-        case 13:
-            tile = """<path id="path55" style="stroke-width:6;paint-order:markers fill stroke" d="m 28.999995,16.00002 c 0,-7.1441594 -5.855831,-12.9999991 -12.999999,-12.9999991 -5.282468,0 -9.8574682,3.2031153 -11.8847643,7.7597651 l -0.011717,-0.0059 A 3.7752101,3.7752101 0 0 1 0.66406256,13.000021 H 0 v 3 2.999999 h 0.66406256 a 3.7752101,3.7752101 0 0 1 3.43945254,2.246094 l 0.011717,-0.0059 c 2.0272961,4.556649 6.6022959,7.759765 11.8847639,7.759765 7.144168,0 12.999999,-5.85584 12.999999,-13.000001 z m -5.999999,0 c 1e-6,3.901519 -3.098472,6.999999 -7,6.999999 -3.901526,0 -6.999999,-3.09848 -6.999999,-6.999999 0,-3.90152 3.098473,-6.9999996 6.999999,-6.9999996 3.901528,0 7.000001,3.0984796 7,6.9999996 z" />"""
-        case 14:
-            tile = """<path id="path55" style="stroke-width:6;paint-order:markers fill stroke" d="m 2.9999966,16.000021 c 0,-7.1441606 5.8558323,-13.0000012 13.0000014,-13.0000012 5.282469,0 9.85747,3.2031159 11.884766,7.7597662 l 0.01172,-0.0059 a 3.7752107,3.7752107 0 0 0 3.439453,2.246094 H 32 v 3 3 h -0.664063 a 3.7752107,3.7752107 0 0 0 -3.439453,2.246094 l -0.01172,-0.0059 c -2.027296,4.55665 -6.602297,7.759766 -11.884766,7.759766 -7.1441691,0 -13.0000014,-5.855841 -13.0000014,-13.000003 z m 6.0000005,0 c -1.1e-6,3.90152 3.0984719,7 7.0000009,7 3.901527,0 7,-3.09848 7,-7 0,-3.901521 -3.098473,-7.0000006 -7,-7.0000006 -3.901529,0 -7.000002,3.0984796 -7.0000009,7.0000006 z" />"""
-        case 15:
-            tile = """<path id="path28" style="stroke-width:6;paint-order:markers fill stroke" d="M 13,0 C 13,7.2152361 7.2152402,13 0,13 v 6 c 7.2152402,0 13,5.784764 13,13 h 6 C 19,24.784764 24.78477,18.999999 32,19 V 13 C 24.78477,13.000001 19,7.2152361 19,0 Z m 3,10.212891 C 17.48785,12.53228 19.465385,14.51096 21.783203,16 19.465385,17.48904 17.48785,19.46772 16,21.787109 14.511334,19.466728 12.532315,17.489345 10.212891,16 12.532315,14.510655 14.511334,12.533272 16,10.212891 Z" />"""
-        case _:
-            tile = """"""
-    return(group + tile + stub_square + "</g>")
+    if len(vectors) == 1:
+        start = point(origin, vectors[0], HALF)
+        end = point(origin, vectors[0], PAD_RADIUS)
+        commands.append(f"M{start[0]},{start[1]}L{end[0]},{end[1]}")
+        shapes.append(
+            f'<circle cx="{center[0]}" cy="{center[1]}" r="{PAD_RADIUS}"/>'
+        )
+    elif len(vectors) == 2:
+        start = point(origin, vectors[0], HALF)
+        end = point(origin, vectors[1], HALF)
+        if mask in STRAIGHT_TILES:
+            commands.append(f"M{start[0]},{start[1]}L{end[0]},{end[1]}")
+        else:
+            # Quarter circle of radius HALF centred on the shared tile corner.
+            sweep = int(
+                vectors[1][0] * vectors[0][1] - vectors[1][1] * vectors[0][0] > 0
+            )
+            commands.append(
+                f"M{start[0]},{start[1]}"
+                f"A{HALF},{HALF} 0 0 {sweep} {end[0]},{end[1]}"
+            )
+    elif len(vectors) > 2:
+        shapes.append(f'<use href="#j{mask}" x="{origin[0]}" y="{origin[1]}"/>')
+    return commands, shapes
 
-def svg_generate(matrix):
-    header = svg_def(len(matrix), len(matrix[0])) + "\n"
-    file = ""
-    for i in range(0, len(matrix)):
-        for j in range(0, len(matrix[0])):
-            file = file + "\n" + svg_draw_tile(matrix[i][j], i, j)
-    file += "\n"
-    return(header + file + "\n" + "</svg>")
+
+def junction_defs(grid: Grid) -> List[str]:
+    """Return ``<path>`` definitions for the junction shapes the grid uses."""
+    used = sorted({mask for line in grid for mask in line} & set(JUNCTION_PATHS))
+    return [
+        f'<path id="j{mask}" fill="#000" stroke="none" '
+        f'd="{JUNCTION_PATHS[mask]}"/>'
+        for mask in used
+    ]
+
+
+def build_svg(grid: Grid) -> str:
+    """Render the whole grid as a single compact SVG document."""
+    rows, cols = len(grid), len(grid[0])
+    width, height = cols * TILE_SIZE, rows * TILE_SIZE
+    commands: List[str] = []
+    shapes: List[str] = []
+
+    for row, line in enumerate(grid):
+        for col, mask in enumerate(line):
+            tile_commands, tile_shapes = tile_elements(
+                mask, (col * TILE_SIZE, row * TILE_SIZE)
+            )
+            commands.extend(tile_commands)
+            shapes.extend(tile_shapes)
+
+    lines = [
+        '<?xml version="1.0" encoding="UTF-8"?>',
+        f'<svg xmlns="http://www.w3.org/2000/svg" width="{width}" '
+        f'height="{height}" viewBox="0 0 {width} {height}">',
+        "<defs>",
+        *junction_defs(grid),
+        "</defs>",
+        f'<g fill="none" stroke="#000" stroke-width="{WIRE_WIDTH}">',
+        f'<path d="{"".join(commands)}"/>',
+        *shapes,
+        "</g>",
+        "</svg>",
+    ]
+    return "\n".join(lines) + "\n"
+
+
+def positive_int(text: str) -> int:
+    """Argparse type: integer greater than zero."""
+    value = int(text)
+    if value < 1:
+        raise argparse.ArgumentTypeError("must be at least 1")
+    return value
+
+
+def probability(text: str) -> float:
+    """Argparse type: float between 0 and 1."""
+    value = float(text)
+    if not 0.0 <= value <= 1.0:
+        raise argparse.ArgumentTypeError("must be between 0 and 1")
+    return value
+
+
+def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
+    """Parse command line arguments."""
+    parser = argparse.ArgumentParser(
+        description="Generate a circuit-like pattern as an SVG file."
+    )
+    parser.add_argument(
+        "-w", "--width", type=positive_int, default=16,
+        help="number of tile columns (default: 16)",
+    )
+    parser.add_argument(
+        "-t", "--height", type=positive_int, default=16,
+        help="number of tile rows (default: 16)",
+    )
+    parser.add_argument(
+        "-d", "--density", type=probability, default=0.55,
+        help="probability of a wire between adjacent tiles (default: 0.55)",
+    )
+    parser.add_argument(
+        "-s", "--seed", type=int, default=None,
+        help="random seed (default: random, always printed)",
+    )
+    parser.add_argument("filename", help="output SVG file")
+    return parser.parse_args(argv)
+
+
+def main() -> int:
+    """Entry point."""
+    args = parse_args()
+    seed = args.seed if args.seed is not None else random.randrange(10**9)
+    print(f"Seed: {seed}")
+    rng = random.Random(seed)
+    grid = generate_grid(args.height, args.width, args.density, rng)
+    with open(args.filename, "w", encoding="utf-8") as svg_file:
+        svg_file.write(build_svg(grid))
+    return 0
+
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description='Generate a circuit-like pattern.')
-    parser.add_argument('-w', '--width')
-    parser.add_argument('-t', '--height')
-    parser.add_argument('filename') # positional argument
-    args = parser.parse_args()
-
-    matrix = create_matrix(new_empty_matrix(int(args.width), int(args.height)))
-
-    svg = svg_generate(matrix)
-    f = open(args.filename, "w")
-    f.write(svg)
-    f.close()
-    exit(0)
+    sys.exit(main())
